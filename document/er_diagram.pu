@@ -1,0 +1,8 @@
+@startuml
+entity sample{
+    * id
+    --
+    int_value
+    str_value
+}
+@enduml

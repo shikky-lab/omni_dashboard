@@ -1,0 +1,60 @@
+{
+    // See https://go.microsoft.com/fwlink/?LinkId=733558
+    // for the documentation about the tasks.json format
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "go build",
+            "type": "shell",
+            "command": "go",
+            "args": [
+                "build",
+                "-o",
+                "./bin/${workspaceFolderBasename}",
+                "-v",
+                "./..."
+            ],
+            "options": {
+                "env": {
+                    "GOARM": 7,
+                    "GOARCH": "arm",
+                    "GOOS": "linux",
+                }
+            }
+        },
+        // {
+        //     "label": "change acl",
+        //     "type": "shell",
+        //     "command": "icacls",
+        //     "args": [
+        //         ".\\bin",
+        //         "/grant",
+        //         "Everyone:F",
+        //     ],
+        // },
+        {
+            "label": "copy",
+            "type": "shell",
+            "command": "xcopy",
+            "args": [
+                "/y",
+                "/I",
+                ".\\bin",
+                "\\\\lnld-pi3.local\\pi\\scripts\\go\\bin"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            // "presentation": {
+            //     "reveal": "always",
+            //     "showReuseMessage": true,
+            //     "echo": true
+            // },
+            "dependsOn": [
+                "go build",
+                // "change acl"
+            ]
+        }
+    ]
+}
