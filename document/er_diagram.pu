@@ -1,8 +1,22 @@
 @startuml
-entity sample{
-    * id
-    --
-    int_value
-    str_value
+entity Iluminances{
+    * Time
+    Value
 }
+
+entity Humidity{
+    * Time
+    Value
+}
+
+entity Temperature{
+    * Time
+    Value
+}
+
+entity Motion{
+    * Time
+    Value
+}
+
 @enduml

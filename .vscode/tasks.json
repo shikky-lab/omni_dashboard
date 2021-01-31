@@ -33,6 +33,24 @@
         //     ],
         // },
         {
+            "label": "copy sqls",
+            "type": "shell",
+            "command": "xcopy",
+            "args": [
+                "/y",
+                "/I",
+                ".\\sql",
+                "\\\\lnld-pi3.local\\pi\\scripts\\go\\sql"
+            ],
+            // "group": {
+            //     "kind": "build",
+            //     "isDefault": true
+            // },
+            // "dependsOn": [
+            //     "go build",
+            // ]
+        },
+        {
             "label": "copy",
             "type": "shell",
             "command": "xcopy",
@@ -46,15 +64,11 @@
                 "kind": "build",
                 "isDefault": true
             },
-            // "presentation": {
-            //     "reveal": "always",
-            //     "showReuseMessage": true,
-            //     "echo": true
-            // },
             "dependsOn": [
-                "go build",
+                "copy sqls",
+                "go build"
                 // "change acl"
             ]
-        }
+        },
     ]
 }
