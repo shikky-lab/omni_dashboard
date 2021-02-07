@@ -15,6 +15,7 @@ import (
 	"github.com/go-yaml/yaml"
 	"github.com/jinzhu/gorm"
 	_ "github.com/jinzhu/gorm/dialects/mysql"
+	"gobot.io/x/gobot/platforms/ble"
 )
 
 const natureRemoTokenPath = "./nature_remo_token.txt"
@@ -215,8 +216,30 @@ func main() {
 		panic(err)
 	}
 
-	for {
-		remoOperator.retrieveSensorValue()
-		time.Sleep(5 * time.Minute)
+	bleAdaptor := ble.NewClientAdaptor("E1:EC:E9:82:8F:60")
+	err = bleAdaptor.Connect()
+	if err != nil {
+		log.Print("Failed to connect to bluetooth device")
+		panic(err)
 	}
+
+	fmt.Println("Connected to device")
+	// byteCode, readErr := bleAdaptor.ReadCharacteristic("cba20002-224d-11e6-9fb8-0002a5d5c51b")
+	byteCode, readErr := bleAdaptor.ReadCharacteristic("cba20d00-224d-11e6-9fb8-0002a5d5c51b")
+
+	if readErr != nil {
+		log.Print("Failed to read characteristic")
+		panic(err)
+	}
+	fmt.Println("Has read characteristic")
+	for _, s := range byteCode {
+		fmt.Printf("%02x", s)
+		fmt.Println()
+	}
+	fmt.Println()
+
+	// for {
+	// remoOperator.retrieveSensorValue()
+	// time.Sleep(5 * time.Minute)
+	// }
 }
