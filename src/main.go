@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,13 +10,17 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
+	"sync"
 	"time"
 
+	"github.com/go-ble/ble"
+	"github.com/go-ble/ble/examples/lib/dev"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/go-yaml/yaml"
 	"github.com/jinzhu/gorm"
 	_ "github.com/jinzhu/gorm/dialects/mysql"
-	"gobot.io/x/gobot/platforms/ble"
+	"github.com/pkg/errors"
 )
 
 const natureRemoTokenPath = "./nature_remo_token.txt"
@@ -68,22 +73,27 @@ type remoDevice struct {
 }
 
 type humidity struct {
-	ID    int `gorm:"cloumn:id"` //タグつけるとcloumn名と紐づけ．なけらばField名が使われる．
 	Value float32
 	Time  time.Time
 }
 type temperature struct {
-	ID    int `gorm:"cloumn:id"` //タグつけるとcloumn名と紐づけ．なけらばField名が使われる．
 	Value float32
 	Time  time.Time
 }
 type illuminance struct {
-	ID    int `gorm:"cloumn:id"` //タグつけるとcloumn名と紐づけ．なけらばField名が使われる．
 	Value float32
 	Time  time.Time
 }
 type moved struct {
-	ID    int `gorm:"cloumn:id"` //タグつけるとcloumn名と紐づけ．なけらばField名が使われる．
+	Value float32
+	Time  time.Time
+}
+
+type sbothumidity struct {
+	Value int
+	Time  time.Time
+}
+type sbottemperature struct {
 	Value float32
 	Time  time.Time
 }
@@ -121,8 +131,12 @@ func gormConnect() *gorm.DB {
 
 /*RemoOperator is contorller class of nature remo*/
 type RemoOperator struct {
-	token string
-	db    *gorm.DB
+	token          string
+	db             *gorm.DB
+	humidityOrm    humidity
+	illuminanceOrm illuminance
+	temperatureOrm temperature
+	movedOrm       moved
 }
 
 func (r *RemoOperator) readToken(tokenPath string) error {
@@ -179,29 +193,191 @@ func (r *RemoOperator) retrieveSensorValue() error {
 	// 	fmt.Println(d.NewestEvents.Il.CreatedAt.Local())
 	// }
 
-	humidityOrm := humidity{}
-	humidityOrm.Value = devices[0].NewestEvents.Hu.Val
-	humidityOrm.Time = devices[0].NewestEvents.Hu.CreatedAt
+	r.humidityOrm.Value = devices[0].NewestEvents.Hu.Val
+	r.humidityOrm.Time = devices[0].NewestEvents.Hu.CreatedAt
 
-	illuminanceOrm := illuminance{}
-	illuminanceOrm.Value = devices[0].NewestEvents.Il.Val
-	illuminanceOrm.Time = devices[0].NewestEvents.Il.CreatedAt
+	r.illuminanceOrm.Value = devices[0].NewestEvents.Il.Val
+	r.illuminanceOrm.Time = devices[0].NewestEvents.Il.CreatedAt
 
-	temperatureOrm := temperature{}
-	temperatureOrm.Value = devices[0].NewestEvents.Te.Val
-	temperatureOrm.Time = devices[0].NewestEvents.Te.CreatedAt
+	r.temperatureOrm.Value = devices[0].NewestEvents.Te.Val
+	r.temperatureOrm.Time = devices[0].NewestEvents.Te.CreatedAt
 
-	movedOrm := moved{}
-	movedOrm.Value = devices[0].NewestEvents.Mo.Val
-	movedOrm.Time = devices[0].NewestEvents.Mo.CreatedAt
-
-	// db.Table("Humidity").Create(&humidityOrm)
-	r.db.Save(&humidityOrm)
-	r.db.Save(&illuminanceOrm)
-	r.db.Save(&temperatureOrm)
-	r.db.Save(&movedOrm)
+	r.movedOrm.Value = devices[0].NewestEvents.Mo.Val
+	r.movedOrm.Time = devices[0].NewestEvents.Mo.CreatedAt
 
 	return nil
+}
+
+func (r *RemoOperator) writeSensoreValue() error {
+	r.db.Save(&r.humidityOrm)
+	r.db.Save(&r.illuminanceOrm)
+	r.db.Save(&r.temperatureOrm)
+	r.db.Save(&r.movedOrm)
+
+	return nil
+}
+
+// SwitchBotReceiver is parser of switchbot sensor.
+type SwitchBotReceiver struct {
+	humidity    int
+	temperature float32
+	retrievedAt time.Time
+	mu          sync.Mutex
+	db          *gorm.DB
+}
+
+func (s *SwitchBotReceiver) setValues(temperature float32, humidity int) {
+	s.mu.Lock()
+	s.humidity = humidity
+	s.temperature = temperature
+	s.retrievedAt = time.Now()
+	s.mu.Unlock()
+}
+
+func (s *SwitchBotReceiver) getValues() (temperature float32, humidity int, retrievedAt time.Time) {
+	s.mu.Lock()
+	humidity = s.humidity
+	temperature = s.temperature
+	retrievedAt = s.retrievedAt
+	s.mu.Unlock()
+	return
+}
+
+func retrieveFromNatureRemoTicker(remoOperator *RemoOperator, interval int) {
+	t := time.NewTicker(time.Duration(interval) * time.Minute)
+	defer t.Stop()
+	for {
+		select {
+		case <-t.C:
+			err := remoOperator.retrieveSensorValue()
+			if err != nil {
+				continue
+			}
+			remoOperator.writeSensoreValue()
+		}
+	}
+
+}
+
+var switchBotReceiver SwitchBotReceiver
+
+func retrieveFromSBotSensorTicker(interval int) {
+	t := time.NewTicker(time.Duration(interval) * time.Minute)
+	defer t.Stop()
+
+	d, err := dev.NewDevice("default")
+	if err != nil {
+		log.Print("Failed to connect to bluetooth device")
+		panic(err)
+	}
+	ble.SetDefaultDevice(d)
+
+	sbotHumidityOrm := sbothumidity{}
+	sbotTemperatureOrm := sbottemperature{}
+	for {
+		select {
+		case <-t.C:
+			//10秒ほど待てば1回は取得できる．
+			ctx := ble.WithSigHandler(context.WithTimeout(context.Background(), 10*time.Second))
+
+			//ブロッキング処理になる．
+			chkErr(ble.Scan(ctx, true, advHandler, advFilter))
+
+			// remoOperator.retrieveSensorValue()
+			temperatureValue, humidityValue, retrievedAt := switchBotReceiver.getValues()
+
+			if humidityValue == 0 || temperatureValue == 0 {
+				fmt.Println("zero!!")
+				continue
+			}
+
+			fmt.Printf("temperature=%2f\n", temperatureValue)
+			fmt.Printf("humidity=%d\n", humidityValue)
+
+			//Update values if it is different from last value.
+			if sbotHumidityOrm.Value != humidityValue {
+				sbotHumidityOrm.Value = humidityValue
+				sbotHumidityOrm.Time = retrievedAt
+			}
+			if sbotTemperatureOrm.Value != temperatureValue {
+				sbotTemperatureOrm.Value = temperatureValue
+				sbotTemperatureOrm.Time = retrievedAt
+			}
+
+			//Update values if it is different from lastvalue(If it is same date, fails to update because of unique key error).
+			switchBotReceiver.db.Save(&sbotHumidityOrm)
+			switchBotReceiver.db.Save(&sbotTemperatureOrm)
+		}
+	}
+
+}
+
+func advFilter(a ble.Advertisement) bool {
+	if strings.EqualFold(a.Addr().String(), "E1:EC:E9:82:8F:60") {
+		return true
+	}
+	return false
+}
+
+func advHandler(a ble.Advertisement) {
+	if a.Connectable() {
+		fmt.Printf("[%s] C %3d:", a.Addr(), a.RSSI())
+	} else {
+		fmt.Printf("[%s] N %3d:", a.Addr(), a.RSSI())
+	}
+	comma := ""
+	if len(a.LocalName()) > 0 {
+		fmt.Printf(" Name: %s", a.LocalName())
+		comma = ","
+	}
+	if len(a.Services()) > 0 {
+		fmt.Printf("%s Svcs: %v", comma, a.Services())
+		comma = ","
+	}
+	if len(a.ManufacturerData()) > 0 {
+		fmt.Printf("%s MD: %X", comma, a.ManufacturerData())
+	}
+	fmt.Println()
+	var temperature float32
+	var humidity int
+	for _, s := range a.ServiceData() {
+		// fmt.Println(s.UUID.String())
+		for i, d := range s.Data {
+			// fmt.Printf("%2x", d)
+			// fmt.Println()
+			switch i {
+			case 0:
+			case 1:
+			case 2:
+			case 3:
+				temperature = float32(int(d&(0x0f))) / 10
+			case 4:
+				temperature += float32(int(d &^ (1 << 7)))
+				if d&(1<<7) == 0 {
+					temperature *= -1
+				}
+			case 5:
+				humidity = int(d &^ (1 << 7))
+			}
+		}
+	}
+	if temperature != 0 && humidity != 0 {
+		fmt.Printf("temp=%f\n", temperature)
+		fmt.Printf("hum=%d\n", humidity)
+		switchBotReceiver.setValues(temperature, humidity)
+	}
+}
+
+func chkErr(err error) {
+	switch errors.Cause(err) {
+	case nil:
+	case context.DeadlineExceeded:
+		// fmt.Printf("done\n")
+	case context.Canceled:
+		fmt.Printf("canceled\n")
+	default:
+		log.Fatalf(err.Error())
+	}
 }
 
 func main() {
@@ -215,31 +391,11 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+	go retrieveFromNatureRemoTicker(&remoOperator, 5)
 
-	bleAdaptor := ble.NewClientAdaptor("E1:EC:E9:82:8F:60")
-	err = bleAdaptor.Connect()
-	if err != nil {
-		log.Print("Failed to connect to bluetooth device")
-		panic(err)
+	switchBotReceiver.db = db
+	go retrieveFromSBotSensorTicker(5)
+
+	for {
 	}
-
-	fmt.Println("Connected to device")
-	// byteCode, readErr := bleAdaptor.ReadCharacteristic("cba20002-224d-11e6-9fb8-0002a5d5c51b")
-	byteCode, readErr := bleAdaptor.ReadCharacteristic("cba20d00-224d-11e6-9fb8-0002a5d5c51b")
-
-	if readErr != nil {
-		log.Print("Failed to read characteristic")
-		panic(err)
-	}
-	fmt.Println("Has read characteristic")
-	for _, s := range byteCode {
-		fmt.Printf("%02x", s)
-		fmt.Println()
-	}
-	fmt.Println()
-
-	// for {
-	// remoOperator.retrieveSensorValue()
-	// time.Sleep(5 * time.Minute)
-	// }
 }
