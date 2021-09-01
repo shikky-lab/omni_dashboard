@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	// "strconv"
 
 	"github.com/go-ble/ble"
 	"github.com/go-ble/ble/examples/lib/dev"
@@ -105,6 +106,15 @@ type dbinfo struct {
 	Protocol string `yaml:"protocol"`
 	Dbname   string `yaml:"dbname"`
 	Param    string `yaml:"param"`
+}
+
+type myCo2SensorRest struct {
+	Val       int   `json:"co2"`
+}
+
+type co2ppm struct {
+	Value       int 
+	Time time.Time
 }
 
 func gormConnect() *gorm.DB {
@@ -243,6 +253,48 @@ func (s *SwitchBotReceiver) getValues() (temperature float32, humidity int, retr
 	return
 }
 
+// Co2 Operator class
+type co2Operator struct {
+	db             *gorm.DB
+	co2Orm    co2ppm
+}
+
+func (c *co2Operator) retrieveSensorValue() error {
+	client := http.Client{}
+	url := "http://192.168.0.116/co2"
+	req, err := http.NewRequest("GET", url, nil)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Fatal("Failed to access to remo")
+		return err
+	}
+	defer resp.Body.Close()
+
+	byteArray, _ := ioutil.ReadAll(resp.Body)
+
+	// fmt.Println(string(byteArray))
+
+	var myCo2Sensor myCo2SensorRest
+	if err := json.Unmarshal(byteArray, &myCo2Sensor); err != nil {
+		log.Fatal("Failed to parse json from co2 sensor")
+		return err
+	}
+	// fmt.Println("Retrieved co2 value : " + strconv.Itoa(myCo2Sensor.Val))
+
+	c.co2Orm.Value = myCo2Sensor.Val
+	c.co2Orm.Time =time.Now() 
+
+	return nil
+}
+
+func (c *co2Operator) writeSensoreValue() error {
+	c.db.Save(&c.co2Orm)
+
+	return nil
+}
+
+// intrrupting funcs
 func retrieveFromNatureRemoTicker(remoOperator *RemoOperator, interval int) {
 	t := time.NewTicker(time.Duration(interval) * time.Minute)
 	defer t.Stop()
@@ -368,6 +420,21 @@ func advHandler(a ble.Advertisement) {
 	}
 }
 
+func retrieveFromMyCo2SensorTicker(_co2Operator *co2Operator, interval int) {
+	t := time.NewTicker(time.Duration(interval) * time.Minute)
+	defer t.Stop()
+	for {
+		select {
+		case <-t.C:
+			err := _co2Operator.retrieveSensorValue()
+			if err != nil {
+				continue
+			}
+			_co2Operator.writeSensoreValue()
+		}
+	}
+}
+
 func chkErr(err error) {
 	switch errors.Cause(err) {
 	case nil:
@@ -395,6 +462,9 @@ func main() {
 
 	switchBotReceiver.db = db
 	go retrieveFromSBotSensorTicker(5)
+
+	_co2Operator := co2Operator{db: db}
+	go retrieveFromMyCo2SensorTicker(&_co2Operator, 5)
 
 	for {
 	}
