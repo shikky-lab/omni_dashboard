@@ -1,0 +1,5 @@
+{
+    // tasks.jsonで参照するパスを下記のように指定する
+    // "piPaths.sql": "\\\\pi_hostname.local\\pi\\scripts\\go\\sql",
+    // "piPaths.bin": "\\\\pi_hostname.local\\pi\\scripts\\go\\bin"
+}

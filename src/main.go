@@ -259,14 +259,15 @@ type co2Operator struct {
 	co2Orm    co2ppm
 }
 
-func (c *co2Operator) retrieveSensorValue() error {
+func (c *co2Operator) retrieveSensorValue(ip string) error {
 	client := http.Client{}
-	url := "http://192.168.0.116/co2"
+	url := fmt.Sprintf("http://%s/co2", ip)
+
 	req, err := http.NewRequest("GET", url, nil)
 
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Fatal("Failed to access to remo")
+		log.Fatal("Failed to access to co2 sensor")
 		return err
 	}
 	defer resp.Body.Close()
@@ -313,7 +314,7 @@ func retrieveFromNatureRemoTicker(remoOperator *RemoOperator, interval int) {
 
 var switchBotReceiver SwitchBotReceiver
 
-func retrieveFromSBotSensorTicker(interval int) {
+func retrieveFromSBotSensorTicker(interval int, bleAddress string) {
 	t := time.NewTicker(time.Duration(interval) * time.Minute)
 	defer t.Stop()
 
@@ -333,7 +334,11 @@ func retrieveFromSBotSensorTicker(interval int) {
 			ctx := ble.WithSigHandler(context.WithTimeout(context.Background(), 10*time.Second))
 
 			//ブロッキング処理になる．
-			chkErr(ble.Scan(ctx, true, advHandler, advFilter))
+			chkErr(ble.Scan(ctx, true, func(a ble.Advertisement) {
+				if advFilter(a, bleAddress) {
+					processAdvertisement(a, &sbotHumidityOrm, &sbotTemperatureOrm)
+				}
+			}, nil))
 
 			// remoOperator.retrieveSensorValue()
 			temperatureValue, humidityValue, retrievedAt := switchBotReceiver.getValues()
@@ -364,8 +369,8 @@ func retrieveFromSBotSensorTicker(interval int) {
 
 }
 
-func advFilter(a ble.Advertisement) bool {
-	if strings.EqualFold(a.Addr().String(), "E1:EC:E9:82:8F:60") {
+func advFilter(a ble.Advertisement, addr string) bool {
+	if strings.EqualFold(a.Addr().String(), addr) {
 		return true
 	}
 	return false
@@ -420,13 +425,13 @@ func advHandler(a ble.Advertisement) {
 	}
 }
 
-func retrieveFromMyCo2SensorTicker(_co2Operator *co2Operator, interval int) {
+func retrieveFromMyCo2SensorTicker(_co2Operator *co2Operator, interval int, sensor_ip_address string) {
 	t := time.NewTicker(time.Duration(interval) * time.Minute)
 	defer t.Stop()
 	for {
 		select {
 		case <-t.C:
-			err := _co2Operator.retrieveSensorValue()
+			err := _co2Operator.retrieveSensorValue(sensor_ip_address)
 			if err != nil {
 				continue
 			}
@@ -453,18 +458,24 @@ func main() {
 	defer db.Close()
 	db.SingularTable(true) //テーブル名とtype名を一致させる(複数形をやめる)
 
-	remoOperator := RemoOperator{db: db}
-	err := remoOperator.readToken(natureRemoTokenPath)
-	if err != nil {
-		panic(err)
-	}
-	go retrieveFromNatureRemoTicker(&remoOperator, 5)
+	//センサの接続先を取得する
+	config := LoadConfig("./config.json")
+	log.Printf("CO2 Sensor IP: %s", config.Co2Sensor.IP)
+	log.Printf("Switchbot BLE MAC: %s", config.Switchbot.MAC)
+
+	//remoはもう使ってないのでコメントアウト
+	// remoOperator := RemoOperator{db: db}
+	// err := remoOperator.readToken(natureRemoTokenPath)
+	// if err != nil {
+	// 	panic(err)
+	// }
+	// go retrieveFromNatureRemoTicker(&remoOperator, 5)
 
 	switchBotReceiver.db = db
-	go retrieveFromSBotSensorTicker(5)
+	go retrieveFromSBotSensorTicker(5,config.Switchbot.MAC)
 
 	_co2Operator := co2Operator{db: db}
-	go retrieveFromMyCo2SensorTicker(&_co2Operator, 5)
+	go retrieveFromMyCo2SensorTicker(&_co2Operator, 5, config.Co2Sensor.IP)
 
 	for {
 	}

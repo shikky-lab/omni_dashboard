@@ -40,7 +40,7 @@
                 "/y",
                 "/I",
                 ".\\sql",
-                "\\\\lnld-pi3.local\\pi\\scripts\\go\\sql"
+                "${config:piPaths.sql}"
             ],
             // "group": {
             //     "kind": "build",
@@ -58,7 +58,7 @@
                 "/y",
                 "/I",
                 ".\\bin",
-                "\\\\lnld-pi3.local\\pi\\scripts\\go\\bin"
+                "${config:piPaths.bin}"
             ],
             "group": {
                 "kind": "build",
